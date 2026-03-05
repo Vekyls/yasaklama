@@ -45,14 +45,13 @@ end
 local maid = Maid.new()
 local isRecording = false
 
--- The three lists we use to store your data
 local playerCF = {}
 local playerAnims = {}
-local playerEvents = {} -- NEW: Stores the exact timestamp of your spells
+local playerEvents = {}
 
 local recordStartTime = 0
 
--- // 2. Asset Sniffer (Steals Ignis VFX automatically)
+-- // 2. Asset Sniffer
 local cachedIgnisVFX = nil
 
 local function startAssetSniffer()
@@ -150,9 +149,9 @@ end
 
 createTargetNameGui()
 
--- // 4. VFX Function (Fake Ignis)
+-- // 4. VFX Function
 local function playFakeIgnis(targetChar)
-    if not cachedIgnisVFX then return end -- Fail silently if not cached yet
+    if not cachedIgnisVFX then return end
 
     local burnSpell = cachedIgnisVFX:Clone()
     local rightArm = targetChar:FindFirstChild("Right Arm")
@@ -188,7 +187,7 @@ end
 local function startRecording()
     table.clear(playerAnims)
     table.clear(playerCF)
-    table.clear(playerEvents) -- Clear old events
+    table.clear(playerEvents)
     
     local rootPart = character:WaitForChild("HumanoidRootPart")
     local humanoid = character:WaitForChild("Humanoid")
@@ -204,6 +203,8 @@ local function startRecording()
     end))
 
     -- 5b. Record Animations
+    -- FIX: Was using animTrack.Stopped:Wait() which races if the anim stops
+    -- before the yield is reached. Using :Connect() is instant and safe.
     maid:GiveTask(humanoid.Animator.AnimationPlayed:Connect(function(animTrack)
         local animData = {
             animationId = animTrack.Animation.AnimationId,
@@ -213,12 +214,16 @@ local function startRecording()
             priority = animTrack.Priority,
             weightTarget = animTrack.WeightTarget
         }
-        animTrack.Stopped:Wait()
-        animData.stoppedAt = tick() - recordStartTime
-        table.insert(playerAnims, animData)
+
+        local stopConn
+        stopConn = animTrack.Stopped:Connect(function()
+            stopConn:Disconnect()
+            animData.stoppedAt = tick() - recordStartTime
+            table.insert(playerAnims, animData)
+        end)
     end))
 
-    -- 5c. NEW: Record Spell Events (Watches for "ActiveCast")
+    -- 5c. Record Spell Events
     maid:GiveTask(character.ChildAdded:Connect(function(child)
         if child.Name == "ActiveCast" then
             table.insert(playerEvents, {
@@ -241,7 +246,7 @@ local function playRecord()
 
     targetChar.Archivable = true
     local newCharacter = targetChar:Clone()
-    maid:GiveTask(newCharacter) 
+    maid:GiveTask(newCharacter)
 
     for _, v in pairs(newCharacter:GetDescendants()) do
         if v:IsA('LuaSourceContainer') then v:Destroy() end
@@ -256,35 +261,36 @@ local function playRecord()
 
     local playbackStartTime = tick()
     local currentCFIndex = 1
-    local currentEventIndex = 1 -- NEW: Tracks which event we are on
+    local currentEventIndex = 1
     local loadedAnimations = {}
+    local totalFrames = #playerCF -- Cache length so we don't recount every frame
 
     -- Playback Loop
     maid:GiveTask(runService.PostSimulation:Connect(function()
         local elapsedTime = tick() - playbackStartTime
         
         -- A. Handle Movement
-        local currentFrame = playerCF[currentCFIndex]
-        local nextFrame = playerCF[currentCFIndex + 1]
-
-        if currentFrame then
-            while nextFrame and elapsedTime >= nextFrame.time do
+        -- FIX: Added nil guard on currentFrame so advancing past the last
+        -- recorded frame can't index into a nil CFrame and error out.
+        if currentCFIndex <= totalFrames then
+            while currentCFIndex < totalFrames and elapsedTime >= playerCF[currentCFIndex + 1].time do
                 currentCFIndex = currentCFIndex + 1
-                currentFrame = playerCF[currentCFIndex]
-                nextFrame = playerCF[currentCFIndex + 1]
             end
+
+            local currentFrame = playerCF[currentCFIndex]
+            local nextFrame = playerCF[currentCFIndex + 1]
 
             if nextFrame then
                 local timeDiff = nextFrame.time - currentFrame.time
-                local timePassed = elapsedTime - currentFrame.time
-                local alpha = math.clamp(timePassed / timeDiff, 0, 1)
+                local alpha = math.clamp((elapsedTime - currentFrame.time) / timeDiff, 0, 1)
                 fakeCharRoot.CFrame = currentFrame.cframe:Lerp(nextFrame.cframe, alpha)
             else
+                -- Holds the very last recorded position instead of freezing at second-to-last
                 fakeCharRoot.CFrame = currentFrame.cframe
             end
         end
 
-        -- B. NEW: Handle Events (Triggers Ignis automatically)
+        -- B. Handle Events
         local nextEvent = playerEvents[currentEventIndex]
         while nextEvent and elapsedTime >= nextEvent.time do
             if nextEvent.type == "Ignis" then
