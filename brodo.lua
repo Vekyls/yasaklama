@@ -1,4 +1,4 @@
--- Prevent the script from running twice and lagging you out
+-- Prevent the script from running twice
 if getgenv().ReplayScriptExecuted then 
     warn("Replay script is already running!")
     return 
@@ -44,8 +44,12 @@ end
 
 local maid = Maid.new()
 local isRecording = false
+
+-- The three lists we use to store your data
 local playerCF = {}
 local playerAnims = {}
+local playerEvents = {} -- NEW: Stores the exact timestamp of your spells
+
 local recordStartTime = 0
 
 -- // 2. Asset Sniffer (Steals Ignis VFX automatically)
@@ -53,18 +57,13 @@ local cachedIgnisVFX = nil
 
 local function startAssetSniffer()
     local thrownFolder = workspace:WaitForChild("Thrown", 5)
-    if not thrownFolder then
-        warn("Thrown folder not found in workspace! Spells might not cache.")
-        return
-    end
+    if not thrownFolder then return end
 
     thrownFolder.ChildAdded:Connect(function(newObject)
         if cachedIgnisVFX then return end
         
         if newObject.Name == "BurnSpell" then
             cachedIgnisVFX = newObject:Clone()
-            
-            -- Hide it in CoreGui so the server can't delete it
             local safeStorage = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
             cachedIgnisVFX.Parent = safeStorage
             
@@ -143,7 +142,7 @@ local function createTargetNameGui()
         
         starterGui:SetCore("SendNotification", {
             Title = "Target Locked",
-            Text = "Target: " .. targetName .. "\nCtrl+Y = Record\nCtrl+Z = Play\nX = Cast Ignis",
+            Text = "Target: " .. targetName .. "\nCtrl+Y = Record\nCtrl+Z = Play",
             Duration = 5
         })
     end)
@@ -153,14 +152,7 @@ createTargetNameGui()
 
 -- // 4. VFX Function (Fake Ignis)
 local function playFakeIgnis(targetChar)
-    if not cachedIgnisVFX then
-        starterGui:SetCore("SendNotification", {
-            Title = "VFX Not Ready",
-            Text = "Someone in the server needs to cast Ignis first so we can steal it!",
-            Duration = 3
-        })
-        return
-    end
+    if not cachedIgnisVFX then return end -- Fail silently if not cached yet
 
     local burnSpell = cachedIgnisVFX:Clone()
     local rightArm = targetChar:FindFirstChild("Right Arm")
@@ -192,16 +184,18 @@ local function playFakeIgnis(targetChar)
     end)
 end
 
--- // 5. Core Logic (Lerping & Recording)
+-- // 5. Core Logic (Recording)
 local function startRecording()
     table.clear(playerAnims)
     table.clear(playerCF)
+    table.clear(playerEvents) -- Clear old events
     
     local rootPart = character:WaitForChild("HumanoidRootPart")
     local humanoid = character:WaitForChild("Humanoid")
     
     recordStartTime = tick()
 
+    -- 5a. Record Movement
     maid:GiveTask(runService.PostSimulation:Connect(function()
         table.insert(playerCF, {
             time = tick() - recordStartTime,
@@ -209,6 +203,7 @@ local function startRecording()
         })
     end))
 
+    -- 5b. Record Animations
     maid:GiveTask(humanoid.Animator.AnimationPlayed:Connect(function(animTrack)
         local animData = {
             animationId = animTrack.Animation.AnimationId,
@@ -218,13 +213,23 @@ local function startRecording()
             priority = animTrack.Priority,
             weightTarget = animTrack.WeightTarget
         }
-
         animTrack.Stopped:Wait()
         animData.stoppedAt = tick() - recordStartTime
         table.insert(playerAnims, animData)
     end))
+
+    -- 5c. NEW: Record Spell Events (Watches for "ActiveCast")
+    maid:GiveTask(character.ChildAdded:Connect(function(child)
+        if child.Name == "ActiveCast" then
+            table.insert(playerEvents, {
+                time = tick() - recordStartTime,
+                type = "Ignis"
+            })
+        end
+    end))
 end
 
+-- // 6. Core Logic (Playback)
 local function playRecord()
     local targetPlayer = players:FindFirstChild(targetName)
     local targetChar = targetPlayer and targetPlayer.Character
@@ -250,33 +255,47 @@ local function playRecord()
     newCharacter.Parent = workspace
 
     local playbackStartTime = tick()
-    local currentIndex = 1
+    local currentCFIndex = 1
+    local currentEventIndex = 1 -- NEW: Tracks which event we are on
     local loadedAnimations = {}
 
+    -- Playback Loop
     maid:GiveTask(runService.PostSimulation:Connect(function()
         local elapsedTime = tick() - playbackStartTime
-        local currentFrame = playerCF[currentIndex]
-        local nextFrame = playerCF[currentIndex + 1]
+        
+        -- A. Handle Movement
+        local currentFrame = playerCF[currentCFIndex]
+        local nextFrame = playerCF[currentCFIndex + 1]
 
-        if not currentFrame then return end
+        if currentFrame then
+            while nextFrame and elapsedTime >= nextFrame.time do
+                currentCFIndex = currentCFIndex + 1
+                currentFrame = playerCF[currentCFIndex]
+                nextFrame = playerCF[currentCFIndex + 1]
+            end
 
-        while nextFrame and elapsedTime >= nextFrame.time do
-            currentIndex = currentIndex + 1
-            currentFrame = playerCF[currentIndex]
-            nextFrame = playerCF[currentIndex + 1]
+            if nextFrame then
+                local timeDiff = nextFrame.time - currentFrame.time
+                local timePassed = elapsedTime - currentFrame.time
+                local alpha = math.clamp(timePassed / timeDiff, 0, 1)
+                fakeCharRoot.CFrame = currentFrame.cframe:Lerp(nextFrame.cframe, alpha)
+            else
+                fakeCharRoot.CFrame = currentFrame.cframe
+            end
         end
 
-        if nextFrame then
-            local timeDiff = nextFrame.time - currentFrame.time
-            local timePassed = elapsedTime - currentFrame.time
-            local alpha = math.clamp(timePassed / timeDiff, 0, 1)
-            
-            fakeCharRoot.CFrame = currentFrame.cframe:Lerp(nextFrame.cframe, alpha)
-        else
-            fakeCharRoot.CFrame = currentFrame.cframe
+        -- B. NEW: Handle Events (Triggers Ignis automatically)
+        local nextEvent = playerEvents[currentEventIndex]
+        while nextEvent and elapsedTime >= nextEvent.time do
+            if nextEvent.type == "Ignis" then
+                playFakeIgnis(newCharacter)
+            end
+            currentEventIndex = currentEventIndex + 1
+            nextEvent = playerEvents[currentEventIndex]
         end
     end))
 
+    -- Playback Animations
     for _, animData in ipairs(playerAnims) do
         task.delay(animData.startedAt, function()
             if not loadedAnimations[animData.animationId] then
@@ -296,7 +315,7 @@ local function playRecord()
     end
 end
 
--- // 6. Input Handling
+-- // 7. Input Handling
 local function isKeyComboPressed(comboTable)
     for _, key in ipairs(comboTable) do
         if not userInputService:IsKeyDown(key) then return false end
@@ -324,13 +343,6 @@ local inputConnection = userInputService.InputBegan:Connect(function(inputObject
     elseif isKeyComboPressed(bindKeyPlay) and not isRecording then
         maid:DoCleaning() 
         playRecord()
-        
-    -- NEW: Press X to cast the fake Ignis on the clone!
-    elseif inputObject.KeyCode == Enum.KeyCode.X then
-        local dummyClone = workspace:FindFirstChild(targetName)
-        if dummyClone then
-            playFakeIgnis(dummyClone)
-        end
     end
 end)
 
