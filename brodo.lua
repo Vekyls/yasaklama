@@ -203,8 +203,6 @@ local function startRecording()
     end))
 
     -- 5b. Record Animations
-    -- FIX: Was using animTrack.Stopped:Wait() which races if the anim stops
-    -- before the yield is reached. Using :Connect() is instant and safe.
     maid:GiveTask(humanoid.Animator.AnimationPlayed:Connect(function(animTrack)
         local animData = {
             animationId = animTrack.Animation.AnimationId,
@@ -263,15 +261,13 @@ local function playRecord()
     local currentCFIndex = 1
     local currentEventIndex = 1
     local loadedAnimations = {}
-    local totalFrames = #playerCF -- Cache length so we don't recount every frame
+    local totalFrames = #playerCF 
 
     -- Playback Loop
     maid:GiveTask(runService.PostSimulation:Connect(function()
         local elapsedTime = tick() - playbackStartTime
         
         -- A. Handle Movement
-        -- FIX: Added nil guard on currentFrame so advancing past the last
-        -- recorded frame can't index into a nil CFrame and error out.
         if currentCFIndex <= totalFrames then
             while currentCFIndex < totalFrames and elapsedTime >= playerCF[currentCFIndex + 1].time do
                 currentCFIndex = currentCFIndex + 1
@@ -285,7 +281,6 @@ local function playRecord()
                 local alpha = math.clamp((elapsedTime - currentFrame.time) / timeDiff, 0, 1)
                 fakeCharRoot.CFrame = currentFrame.cframe:Lerp(nextFrame.cframe, alpha)
             else
-                -- Holds the very last recorded position instead of freezing at second-to-last
                 fakeCharRoot.CFrame = currentFrame.cframe
             end
         end
@@ -349,6 +344,13 @@ local inputConnection = userInputService.InputBegan:Connect(function(inputObject
     elseif isKeyComboPressed(bindKeyPlay) and not isRecording then
         maid:DoCleaning() 
         playRecord()
+        
+    -- NEW: Manual X Keybind for testing VFX
+    elseif inputObject.KeyCode == Enum.KeyCode.X then
+        local dummyClone = workspace:FindFirstChild(targetName)
+        if dummyClone then
+            playFakeIgnis(dummyClone)
+        end
     end
 end)
 
