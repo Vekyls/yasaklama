@@ -149,7 +149,7 @@ end
 
 createTargetNameGui()
 
--- // 4. VFX Function (WITH PRINT DEBUGGING)
+-- // 4. VFX Function (BUG FIXED & CRASH-PROOF)
 local function playFakeIgnis(targetChar)
     print("--- ATTEMPTING TO CAST FAKE IGNIS ---")
     
@@ -161,10 +161,9 @@ local function playFakeIgnis(targetChar)
 
     local burnSpell = cachedIgnisVFX:Clone()
     
-    -- Check if the dummy actually has a Right Arm
     local rightArm = targetChar:FindFirstChild("Right Arm")
     if not rightArm then 
-        warn("DEBUG: Failed! Could not find 'Right Arm' on the dummy. Is the game using R15 models?")
+        warn("DEBUG: Failed! Could not find 'Right Arm' on the dummy.")
         return 
     end
     print("DEBUG: Step 2 Passed - Found the Right Arm!")
@@ -178,25 +177,34 @@ local function playFakeIgnis(targetChar)
     burnSpell.Parent = targetChar
     print("DEBUG: Step 3 Passed - Welded to the arm!")
     
-    burnSpell.PointLight.Enabled = true
-    burnSpell.SpotLight.Enabled = true
-    burnSpell.SpotLight.Color = Color3.fromRGB(255, 128, 43)
-    burnSpell.PointLight.Color = Color3.fromRGB(255, 128, 43)
+    -- SAFELY CHECK FOR LIGHTS BEFORE TURNING THEM ON
+    local pointLight = burnSpell:FindFirstChild("PointLight")
+    if pointLight then
+        pointLight.Enabled = true
+        pointLight.Color = Color3.fromRGB(255, 128, 43)
+    end
     
+    local spotLight = burnSpell:FindFirstChild("SpotLight")
+    if spotLight then
+        spotLight.Enabled = true
+        spotLight.Color = Color3.fromRGB(255, 128, 43)
+    end
+    
+    -- TURN ON THE ACTUAL FIRE
     local mainIgnis = burnSpell:FindFirstChild("Flames")
     if mainIgnis then 
         mainIgnis.Enabled = true 
-        print("DEBUG: Step 4 Passed - Turned the flames on!")
+        print("DEBUG: Step 4 Passed - Turned the FLAMES on!")
     else
-        warn("DEBUG: Missing 'Flames' inside the BurnSpell brick!")
+        warn("DEBUG: Still missing 'Flames' inside the BurnSpell brick!")
     end
 
     if burnSpell:FindFirstChild("Hit") then burnSpell.Hit:Play() end
 
     task.delay(2, function()
         if mainIgnis then mainIgnis.Enabled = false end
-        burnSpell.PointLight.Enabled = false
-        burnSpell.SpotLight.Enabled = false
+        if pointLight then pointLight.Enabled = false end
+        if spotLight then spotLight.Enabled = false end
         task.wait(1.5)
         if burnSpell then burnSpell:Destroy() end
         print("--- FAKE IGNIS FINISHED AND CLEANED UP ---")
