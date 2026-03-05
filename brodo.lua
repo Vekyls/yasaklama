@@ -16,8 +16,8 @@ local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
 local targetName = ""
 
 -- The Keybinds: Ctrl+Q to Record, Ctrl+E to Play
-local bindKeyRecord = {Enum.KeyCode.LeftControl, Enum.KeyCode.Q} 
-local bindKeyPlay = {Enum.KeyCode.LeftControl, Enum.KeyCode.E} 
+local bindKeyRecord = {Enum.KeyCode.LeftControl, Enum.KeyCode.Y} 
+local bindKeyPlay = {Enum.KeyCode.LeftControl, Enum.KeyCode.Z} 
 
 -- // 1. Maid Class (Memory Manager)
 local Maid = {}
@@ -247,3 +247,4 @@ end)
 
 -- Give the input listener to a master cleanup task if needed later
 getgenv().ReplayScriptConnection = inputConnection
+
