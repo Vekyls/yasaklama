@@ -1,5 +1,9 @@
-if (_G.replayScriptRan) then return end
-_G.replayScriptRan = true
+
+if getgenv().ReplayScriptExecuted then 
+    warn("Replay script is already running!")
+    return 
+end
+getgenv().ReplayScriptExecuted = true
 
 local runService = game:GetService('RunService')
 local players = game:GetService('Players')
@@ -9,196 +13,125 @@ local starterGui = game:GetService("StarterGui")
 local localPlayer = players.LocalPlayer
 local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
 
--- Target variable moved up here so both the GUI and the Playback function can access it safely
-local targetName = "" 
+local targetName = ""
 
--- // 1. GUI Setup (Modern gethui() protection)
+-- The Keybinds: Ctrl+Q to Record, Ctrl+E to Play
+local bindKeyRecord = {Enum.KeyCode.LeftControl, Enum.KeyCode.Q} 
+local bindKeyPlay = {Enum.KeyCode.LeftControl, Enum.KeyCode.E} 
+
+-- // 1. Maid Class (Memory Manager)
+local Maid = {}
+Maid.__index = Maid
+
+do
+    Maid.ClassName = "Maid"
+    
+    function Maid.new() 
+        return setmetatable({ _tasks = {} }, Maid) 
+    end
+    
+    function Maid:GiveTask(task)
+        local taskId = #self._tasks+1
+        self._tasks[taskId] = task
+        return taskId
+    end
+    
+    function Maid:DoCleaning()
+        for index, task in pairs(self._tasks) do
+            if typeof(task) == "RBXScriptConnection" then task:Disconnect()
+            elseif type(task) == "function" then task()
+            elseif typeof(task) == 'table' and task.Remove then task:Remove()
+            elseif typeof(task) == "Instance" then task:Destroy() end
+            self._tasks[index] = nil
+        end
+    end
+end
+
+local maid = Maid.new()
+local isRecording = false
+local playerCF = {}
+local playerAnims = {}
+local recordStartTime = 0
+
+-- // 2. Executor-Ready GUI Setup
 local function createTargetNameGui()
     local gui = Instance.new("ScreenGui")
     gui.Name = "TargetNameGui"
     
-    -- Modern UI protection for Volt/others
+    -- Modern Executor GUI Protection (Hides it from Anti-Cheats)
     local safeGuiParent = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
     gui.Parent = safeGuiParent
     
     local targetFrame = Instance.new("Frame")
-    local targetLabel = Instance.new("TextLabel")
-    local targetInput = Instance.new("TextBox")
-    local okButton = Instance.new("TextButton")
-    
-    targetFrame.Name = "TargetFrame"
+    targetFrame.Size = UDim2.new(0, 300, 0, 150)
+    targetFrame.Position = UDim2.new(0.5, -150, 0.5, -75)
+    targetFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    targetFrame.BorderSizePixel = 0
     targetFrame.Parent = gui
-    targetFrame.Position = UDim2.new(0.5, -150, 0.5, -100)
-    targetFrame.Size = UDim2.new(0, 300, 0, 200)
     
-    targetLabel.Name = "TargetLabel"
+    local targetLabel = Instance.new("TextLabel")
+    targetLabel.Text = "Enter target username:"
+    targetLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    targetLabel.BackgroundTransparency = 1
+    targetLabel.Size = UDim2.new(1, 0, 0, 40)
+    targetLabel.Font = Enum.Font.GothamBold
+    targetLabel.TextSize = 16
     targetLabel.Parent = targetFrame
-    targetLabel.Position = UDim2.new(0, 0, 0, 20)
-    targetLabel.Size = UDim2.new(0, 300, 0, 40)
-    targetLabel.Text = "Enter target name:"
-    targetLabel.TextScaled = true
     
-    targetInput.Name = "TargetInput"
-    targetInput.Parent = targetFrame
-    targetInput.Position = UDim2.new(0, 0, 0, 80)
+    local targetInput = Instance.new("TextBox")
     targetInput.Size = UDim2.new(0, 200, 0, 40)
+    targetInput.Position = UDim2.new(0.5, -100, 0, 50)
+    targetInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    targetInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+    targetInput.Font = Enum.Font.Gotham
+    targetInput.TextSize = 14
+    targetInput.Parent = targetFrame
     
-    okButton.Name = "OkButton"
-    okButton.Parent = targetFrame
-    okButton.Position = UDim2.new(0, 50, 0, 140)
+    local okButton = Instance.new("TextButton")
+    okButton.Text = "Lock Target"
     okButton.Size = UDim2.new(0, 100, 0, 40)
-    okButton.Text = "OK"
+    okButton.Position = UDim2.new(0.5, -50, 0, 100)
+    okButton.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
+    okButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    okButton.Font = Enum.Font.GothamBold
+    okButton.TextSize = 14
+    okButton.Parent = targetFrame
     
     okButton.MouseButton1Click:Connect(function()
         targetName = targetInput.Text
-        targetFrame.Visible = false
+        gui:Destroy() 
         
         starterGui:SetCore("SendNotification", {
-            Title = "Target Set",
-            Text = "Target is now: " .. targetName,
-            Duration = 3
+            Title = "Target Locked",
+            Text = "Target: " .. targetName .. "\nCtrl+Q to Record\nCtrl+E to Play",
+            Duration = 5
         })
     end)
 end
 
 createTargetNameGui()
 
-
--- // 2. Maid Class & Variables
-local bindKey = {Enum.KeyCode.LeftControl, Enum.KeyCode.Y} 
-local bindKey2 = {Enum.KeyCode.LeftControl, Enum.KeyCode.Z} 
-
-local Maid = {}
-do
-    Maid.ClassName = "Maid"
-
-    function Maid.new()
-        return setmetatable({ _tasks = {} }, Maid)
-    end
-
-    function Maid.isMaid(value)
-        return type(value) == "table" and value.ClassName == "Maid"
-    end
-
-    function Maid.__index(self, index)
-        if Maid[index] then
-            return Maid[index]
-        else
-            return self._tasks[index]
-        end
-    end
-
-    function Maid:__newindex(index, newTask)
-        if Maid[index] ~= nil then error(("'%s' is reserved"):format(tostring(index)), 2) end
-        local tasks = self._tasks
-        local oldTask = tasks[index]
-        if oldTask == newTask then return end
-
-        tasks[index] = newTask
-        if oldTask then
-            if type(oldTask) == "function" then oldTask()
-            elseif typeof(oldTask) == "RBXScriptConnection" then oldTask:Disconnect()
-            elseif typeof(oldTask) == 'table' then oldTask:Remove()
-            elseif oldTask.Destroy then oldTask:Destroy() end
-        end
-    end
-
-    function Maid:GiveTask(task)
-        if not task then error("Task cannot be false or nil", 2) end
-        local taskId = #self._tasks+1
-        self[taskId] = task
-        if typeof(task) == 'table' and not task.Remove then
-            warn("[Maid.GiveTask] - Gave table task without .Remove\n\n" .. debug.traceback())
-        end
-        return taskId
-    end
-
-    function Maid:DoCleaning()
-        local tasks = self._tasks
-        for index, task in pairs(tasks) do
-            if typeof(task) == "RBXScriptConnection" then
-                tasks[index] = nil
-                task:Disconnect()
-            end
-        end
-
-        local index, task = next(tasks)
-        while task ~= nil do
-            tasks[index] = nil
-            if type(task) == "function" then task()
-            elseif typeof(task) == "RBXScriptConnection" then task:Disconnect()
-            elseif typeof(task) == 'table' then task:Remove()
-            elseif task.Destroy then task:Destroy() end
-            index, task = next(tasks)
-        end
-    end
-
-    Maid.Destroy = Maid.DoCleaning
-end
-
-local maid = Maid.new()
-local isRecording = false
-local frameRate = 60
-local playerCF = {}
-local playerAnims = {}
-
-local recordLabel = Drawing.new('Text')
-recordLabel.Visible = false -- Changed default to false so it only shows when recording
-recordLabel.Size = 30
-recordLabel.Color = Color3.fromHex('ffffff')
-recordLabel.Transparency = 1
-recordLabel.Position = Vector2.new(workspace.CurrentCamera.ViewportSize.X / 2, 50)
-recordLabel.Center = true
-
-local function reverseTable(t)
-    local newT = {}
-    for i = #t, 1, -1 do
-        table.insert(newT, t[i])
-    end
-    return newT
-end
-
-
--- // 3. Core Logic (Record and Play)
+-- // 3. Core Logic (Lerping & Recording)
 local function startRecording()
     table.clear(playerAnims)
     table.clear(playerCF)
-
-    local rootPart = character.HumanoidRootPart
-    local humanoid = character.Humanoid
     
-    local startedAt = tick()
-    local lastRanAt = 0
+    local rootPart = character:WaitForChild("HumanoidRootPart")
+    local humanoid = character:WaitForChild("Humanoid")
+    
+    recordStartTime = tick()
 
-    maid:GiveTask(runService.Heartbeat:Connect(function()
-        if (tick() - lastRanAt < 1/frameRate) then return end
-        lastRanAt = tick()
-        table.insert(playerCF, rootPart.CFrame)
+    maid:GiveTask(runService.PostSimulation:Connect(function()
+        table.insert(playerCF, {
+            time = tick() - recordStartTime,
+            cframe = rootPart.CFrame
+        })
     end))
 
-    for _, animTrack in next, humanoid:GetPlayingAnimationTracks() do
-        task.spawn(function()
-            local animData = {
-                animation = animTrack.Animation.AnimationId,
-                startedAt = 0,
-                position = animTrack.TimePosition,
-                looped = animTrack.Looped,
-                speed = animTrack.Speed,
-                priority = animTrack.Priority,
-                weightTarget = animTrack.WeightTarget
-            }
-
-            animTrack.Stopped:Wait()
-            animData.stoppedAt = tick() - startedAt
-            table.insert(playerAnims, animData)
-        end)
-    end
-    
     maid:GiveTask(humanoid.Animator.AnimationPlayed:Connect(function(animTrack)
-        task.wait()
         local animData = {
-            animation = animTrack.Animation.AnimationId,
-            startedAt = tick() - startedAt,
+            animationId = animTrack.Animation.AnimationId,
+            startedAt = tick() - recordStartTime,
             looped = animTrack.Looped,
             speed = animTrack.Speed,
             priority = animTrack.Priority,
@@ -206,98 +139,111 @@ local function startRecording()
         }
 
         animTrack.Stopped:Wait()
-        animData.stoppedAt = tick() - startedAt
+        animData.stoppedAt = tick() - recordStartTime
         table.insert(playerAnims, animData)
     end))
+    
+    starterGui:SetCore("SendNotification", {Title = "Status", Text = "Recording Started...", Duration = 2})
 end
 
 local function playRecord()
-    local realPlayerCF = reverseTable(playerCF)
     local targetPlayer = players:FindFirstChild(targetName)
     local targetChar = targetPlayer and targetPlayer.Character
 
-    if (not targetChar) then
-        starterGui:SetCore("SendNotification", {
-            Title = "Error",
-            Text = "Target '"..targetName.."' not found!",
-            Duration = 3
-        })
+    if not targetChar then
+        starterGui:SetCore("SendNotification", {Title = "Error", Text = "Target '"..targetName.."' not found!", Duration = 3})
         return
     end
 
     targetChar.Archivable = true
     local newCharacter = targetChar:Clone()
+    maid:GiveTask(newCharacter) 
 
-    for i, v in next, newCharacter:GetDescendants() do
-        if (v:IsA('LuaSourceContainer')) then
-            v:Destroy()
-        end
+    for _, v in pairs(newCharacter:GetDescendants()) do
+        if v:IsA('LuaSourceContainer') then v:Destroy() end
     end
 
-    local fakeCharRoot = newCharacter.HumanoidRootPart
-    local fakeCharHumanoid = newCharacter.Humanoid
-
+    local fakeCharRoot = newCharacter:WaitForChild("HumanoidRootPart")
+    local fakeCharHumanoid = newCharacter:WaitForChild("Humanoid")
+    local fakeAnimator = fakeCharHumanoid:WaitForChild("Animator")
+    
     fakeCharRoot.Anchored = true
-    fakeCharRoot.CFrame = table.remove(realPlayerCF)
     newCharacter.Parent = workspace
 
-    local lastRanAt = 0
+    local playbackStartTime = tick()
+    local currentIndex = 1
+    local loadedAnimations = {}
 
-    maid:GiveTask(runService.Heartbeat:Connect(function()
-        if (tick() - lastRanAt < 1/frameRate) then return end
-        lastRanAt = tick()
-        local cf = table.remove(realPlayerCF)
-        if (not cf) then return maid:Destroy() end
-        fakeCharRoot.CFrame = cf
+    maid:GiveTask(runService.PostSimulation:Connect(function()
+        local elapsedTime = tick() - playbackStartTime
+        local currentFrame = playerCF[currentIndex]
+        local nextFrame = playerCF[currentIndex + 1]
+
+        if not currentFrame then return end
+
+        while nextFrame and elapsedTime >= nextFrame.time do
+            currentIndex = currentIndex + 1
+            currentFrame = playerCF[currentIndex]
+            nextFrame = playerCF[currentIndex + 1]
+        end
+
+        if nextFrame then
+            local timeDiff = nextFrame.time - currentFrame.time
+            local timePassed = elapsedTime - currentFrame.time
+            local alpha = math.clamp(timePassed / timeDiff, 0, 1)
+            
+            fakeCharRoot.CFrame = currentFrame.cframe:Lerp(nextFrame.cframe, alpha)
+        else
+            fakeCharRoot.CFrame = currentFrame.cframe
+        end
     end))
 
-    for i, v in next, playerAnims do
-        local animInstance = Instance.new('Animation')
-        animInstance.AnimationId = v.animation
+    for _, animData in ipairs(playerAnims) do
+        task.delay(animData.startedAt, function()
+            if not loadedAnimations[animData.animationId] then
+                local animInstance = Instance.new('Animation')
+                animInstance.AnimationId = animData.animationId
+                loadedAnimations[animData.animationId] = fakeAnimator:LoadAnimation(animInstance)
+            end
 
-        task.delay(v.startedAt, function()
-            local anim = newCharacter.Humanoid.Animator:LoadAnimation(animInstance)
-            anim.Priority = v.priority
-            anim.Looped = v.looped
-            anim.TimePosition = v.position or 0
+            local anim = loadedAnimations[animData.animationId]
+            anim.Priority = animData.priority
+            anim.Looped = animData.looped
+            anim:Play(nil, animData.weightTarget, animData.speed)
 
-            anim:Play(nil, v.weightTarget, v.speed)
-            task.wait(v.stoppedAt - v.startedAt)
+            task.wait(animData.stoppedAt - animData.startedAt)
             anim:Stop()
-            animInstance:Destroy()
         end)
     end
 end
 
-local function toggleRecord()
-    if (isRecording) then
-        maid:DoCleaning()
-        recordLabel.Visible = false
-    else
-        recordLabel.Visible = true
-        recordLabel.Text = 'Recording...'
-        startRecording()
-    end
-    isRecording = not isRecording
-end
-
+-- // 4. Input Handling
 local function isKeyComboPressed(comboTable)
-    for _, key in next, comboTable do
-        if (not userInputService:IsKeyDown(key)) then
-            return false
-        end
+    for _, key in ipairs(comboTable) do
+        if not userInputService:IsKeyDown(key) then return false end
     end
     return true
 end
 
-local function onInputBegan(inputObject, gpe)
-    if (inputObject.KeyCode == Enum.KeyCode.Unknown) then return end
+-- Hook into user input safely
+local inputConnection = userInputService.InputBegan:Connect(function(inputObject, gpe)
+    if gpe or inputObject.KeyCode == Enum.KeyCode.Unknown then return end
 
-    if (isKeyComboPressed(bindKey)) then
-        toggleRecord()
-    elseif (isKeyComboPressed(bindKey2)) then
+    if isKeyComboPressed(bindKeyRecord) then
+        if isRecording then
+            maid:DoCleaning() 
+            starterGui:SetCore("SendNotification", {Title = "Status", Text = "Recording Stopped.", Duration = 2})
+        else
+            maid:DoCleaning() 
+            startRecording()
+        end
+        isRecording = not isRecording
+
+    elseif isKeyComboPressed(bindKeyPlay) and not isRecording then
+        maid:DoCleaning() 
         playRecord()
     end
-end
+end)
 
-userInputService.InputBegan:Connect(onInputBegan)
+-- Give the input listener to a master cleanup task if needed later
+getgenv().ReplayScriptConnection = inputConnection
