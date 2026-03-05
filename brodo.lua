@@ -1,4 +1,4 @@
-
+-- Prevent the script from running twice and lagging you out
 if getgenv().ReplayScriptExecuted then 
     warn("Replay script is already running!")
     return 
@@ -15,7 +15,7 @@ local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
 
 local targetName = ""
 
--- The Keybinds: Ctrl+Q to Record, Ctrl+E to Play
+-- The Keybinds
 local bindKeyRecord = {Enum.KeyCode.LeftControl, Enum.KeyCode.Y} 
 local bindKeyPlay = {Enum.KeyCode.LeftControl, Enum.KeyCode.Z} 
 
@@ -25,17 +25,12 @@ Maid.__index = Maid
 
 do
     Maid.ClassName = "Maid"
-    
-    function Maid.new() 
-        return setmetatable({ _tasks = {} }, Maid) 
-    end
-    
+    function Maid.new() return setmetatable({ _tasks = {} }, Maid) end
     function Maid:GiveTask(task)
         local taskId = #self._tasks+1
         self._tasks[taskId] = task
         return taskId
     end
-    
     function Maid:DoCleaning()
         for index, task in pairs(self._tasks) do
             if typeof(task) == "RBXScriptConnection" then task:Disconnect()
@@ -53,12 +48,57 @@ local playerCF = {}
 local playerAnims = {}
 local recordStartTime = 0
 
--- // 2. Executor-Ready GUI Setup
+-- // 2. Asset Sniffer (Steals Ignis VFX automatically)
+local cachedIgnisVFX = nil
+
+local function startAssetSniffer()
+    local thrownFolder = workspace:WaitForChild("Thrown", 5)
+    if not thrownFolder then
+        warn("Thrown folder not found in workspace! Spells might not cache.")
+        return
+    end
+
+    thrownFolder.ChildAdded:Connect(function(newObject)
+        if cachedIgnisVFX then return end
+        
+        if newObject.Name == "BurnSpell" then
+            cachedIgnisVFX = newObject:Clone()
+            
+            -- Hide it in CoreGui so the server can't delete it
+            local safeStorage = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
+            cachedIgnisVFX.Parent = safeStorage
+            
+            if cachedIgnisVFX:FindFirstChild("Flames") then
+                cachedIgnisVFX.Flames.Enabled = false
+            end
+            
+            starterGui:SetCore("SendNotification", {
+                Title = "VFX Cached!",
+                Text = "Successfully sniffed and stored Ignis VFX.",
+                Duration = 3
+            })
+        end
+    end)
+end
+
+startAssetSniffer()
+
+-- // 3. Executor-Ready GUI Setup
+local recordLabel = nil
+if Drawing then
+    recordLabel = Drawing.new('Text')
+    recordLabel.Visible = false 
+    recordLabel.Size = 30
+    recordLabel.Color = Color3.fromHex('ffffff')
+    recordLabel.Transparency = 1
+    recordLabel.Position = Vector2.new(workspace.CurrentCamera.ViewportSize.X / 2, 50)
+    recordLabel.Center = true
+end
+
 local function createTargetNameGui()
     local gui = Instance.new("ScreenGui")
     gui.Name = "TargetNameGui"
     
-    -- Modern Executor GUI Protection (Hides it from Anti-Cheats)
     local safeGuiParent = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
     gui.Parent = safeGuiParent
     
@@ -103,7 +143,7 @@ local function createTargetNameGui()
         
         starterGui:SetCore("SendNotification", {
             Title = "Target Locked",
-            Text = "Target: " .. targetName .. "\nCtrl+Q to Record\nCtrl+E to Play",
+            Text = "Target: " .. targetName .. "\nCtrl+Y = Record\nCtrl+Z = Play\nX = Cast Ignis",
             Duration = 5
         })
     end)
@@ -111,7 +151,48 @@ end
 
 createTargetNameGui()
 
--- // 3. Core Logic (Lerping & Recording)
+-- // 4. VFX Function (Fake Ignis)
+local function playFakeIgnis(targetChar)
+    if not cachedIgnisVFX then
+        starterGui:SetCore("SendNotification", {
+            Title = "VFX Not Ready",
+            Text = "Someone in the server needs to cast Ignis first so we can steal it!",
+            Duration = 3
+        })
+        return
+    end
+
+    local burnSpell = cachedIgnisVFX:Clone()
+    local rightArm = targetChar:FindFirstChild("Right Arm")
+    if not rightArm then return end
+
+    local weld = Instance.new("Weld")
+    weld.Part0 = rightArm
+    weld.Part1 = burnSpell
+    weld.C1 = CFrame.new(0, -1.2, 0) * CFrame.Angles(0, 0, math.pi)
+    weld.Parent = burnSpell
+
+    burnSpell.Parent = targetChar
+    
+    burnSpell.PointLight.Enabled = true
+    burnSpell.SpotLight.Enabled = true
+    burnSpell.SpotLight.Color = Color3.fromRGB(255, 128, 43)
+    burnSpell.PointLight.Color = Color3.fromRGB(255, 128, 43)
+    
+    local mainIgnis = burnSpell:FindFirstChild("Flames")
+    if mainIgnis then mainIgnis.Enabled = true end
+    if burnSpell:FindFirstChild("Hit") then burnSpell.Hit:Play() end
+
+    task.delay(2, function()
+        if mainIgnis then mainIgnis.Enabled = false end
+        burnSpell.PointLight.Enabled = false
+        burnSpell.SpotLight.Enabled = false
+        task.wait(1.5)
+        if burnSpell then burnSpell:Destroy() end
+    end)
+end
+
+-- // 5. Core Logic (Lerping & Recording)
 local function startRecording()
     table.clear(playerAnims)
     table.clear(playerCF)
@@ -142,8 +223,6 @@ local function startRecording()
         animData.stoppedAt = tick() - recordStartTime
         table.insert(playerAnims, animData)
     end))
-    
-    starterGui:SetCore("SendNotification", {Title = "Status", Text = "Recording Started...", Duration = 2})
 end
 
 local function playRecord()
@@ -217,7 +296,7 @@ local function playRecord()
     end
 end
 
--- // 4. Input Handling
+-- // 6. Input Handling
 local function isKeyComboPressed(comboTable)
     for _, key in ipairs(comboTable) do
         if not userInputService:IsKeyDown(key) then return false end
@@ -225,16 +304,19 @@ local function isKeyComboPressed(comboTable)
     return true
 end
 
--- Hook into user input safely
 local inputConnection = userInputService.InputBegan:Connect(function(inputObject, gpe)
     if gpe or inputObject.KeyCode == Enum.KeyCode.Unknown then return end
 
     if isKeyComboPressed(bindKeyRecord) then
         if isRecording then
             maid:DoCleaning() 
-            starterGui:SetCore("SendNotification", {Title = "Status", Text = "Recording Stopped.", Duration = 2})
+            if recordLabel then recordLabel.Visible = false end
         else
             maid:DoCleaning() 
+            if recordLabel then 
+                recordLabel.Visible = true 
+                recordLabel.Text = 'Recording...'
+            end
             startRecording()
         end
         isRecording = not isRecording
@@ -242,9 +324,14 @@ local inputConnection = userInputService.InputBegan:Connect(function(inputObject
     elseif isKeyComboPressed(bindKeyPlay) and not isRecording then
         maid:DoCleaning() 
         playRecord()
+        
+    -- NEW: Press X to cast the fake Ignis on the clone!
+    elseif inputObject.KeyCode == Enum.KeyCode.X then
+        local dummyClone = workspace:FindFirstChild(targetName)
+        if dummyClone then
+            playFakeIgnis(dummyClone)
+        end
     end
 end)
 
--- Give the input listener to a master cleanup task if needed later
 getgenv().ReplayScriptConnection = inputConnection
-
