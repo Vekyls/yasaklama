@@ -51,7 +51,7 @@ local playerEvents = {}
 
 local recordStartTime = 0
 
--- // 2. Asset Sniffer
+-- // 2. Asset Sniffer (NETWORK DELAY FIX INCLUDED)
 local cachedIgnisVFX = nil
 
 local function startAssetSniffer()
@@ -62,6 +62,15 @@ local function startAssetSniffer()
         if cachedIgnisVFX then return end
         
         if newObject.Name == "BurnSpell" then
+            -- NEW: Wait for the server to actually put the fire inside the box over the internet!
+            local flames = newObject:WaitForChild("Flames", 2)
+            
+            if not flames then
+                warn("DEBUG: Sniffer saw BurnSpell, but the Flames never arrived over the internet!")
+                return
+            end
+
+            -- Now that the box is packed, steal it.
             cachedIgnisVFX = newObject:Clone()
             local safeStorage = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
             cachedIgnisVFX.Parent = safeStorage
@@ -149,7 +158,7 @@ end
 
 createTargetNameGui()
 
--- // 4. VFX Function (BUG FIXED & CRASH-PROOF)
+-- // 4. VFX Function (SAFE CHECKS INCLUDED)
 local function playFakeIgnis(targetChar)
     print("--- ATTEMPTING TO CAST FAKE IGNIS ---")
     
@@ -177,7 +186,6 @@ local function playFakeIgnis(targetChar)
     burnSpell.Parent = targetChar
     print("DEBUG: Step 3 Passed - Welded to the arm!")
     
-    -- SAFELY CHECK FOR LIGHTS BEFORE TURNING THEM ON
     local pointLight = burnSpell:FindFirstChild("PointLight")
     if pointLight then
         pointLight.Enabled = true
@@ -190,7 +198,6 @@ local function playFakeIgnis(targetChar)
         spotLight.Color = Color3.fromRGB(255, 128, 43)
     end
     
-    -- TURN ON THE ACTUAL FIRE
     local mainIgnis = burnSpell:FindFirstChild("Flames")
     if mainIgnis then 
         mainIgnis.Enabled = true 
@@ -222,7 +229,6 @@ local function startRecording()
     
     recordStartTime = tick()
 
-    -- 5a. Record Movement
     maid:GiveTask(runService.PostSimulation:Connect(function()
         table.insert(playerCF, {
             time = tick() - recordStartTime,
@@ -230,7 +236,6 @@ local function startRecording()
         })
     end))
 
-    -- 5b. Record Animations
     maid:GiveTask(humanoid.Animator.AnimationPlayed:Connect(function(animTrack)
         local animData = {
             animationId = animTrack.Animation.AnimationId,
@@ -249,7 +254,6 @@ local function startRecording()
         end)
     end))
 
-    -- 5c. Record Spell Events
     maid:GiveTask(character.ChildAdded:Connect(function(child)
         if child.Name == "ActiveCast" then
             table.insert(playerEvents, {
@@ -273,7 +277,7 @@ local function playRecord()
     targetChar.Archivable = true
     local newCharacter = targetChar:Clone()
     
-    -- FIX: Name the clone something unique so we don't accidentally grab the real player!
+    -- EVIL TWIN FIX
     newCharacter.Name = targetName .. "_ReplayDummy"
     
     maid:GiveTask(newCharacter)
@@ -295,11 +299,9 @@ local function playRecord()
     local loadedAnimations = {}
     local totalFrames = #playerCF 
 
-    -- Playback Loop
     maid:GiveTask(runService.PostSimulation:Connect(function()
         local elapsedTime = tick() - playbackStartTime
         
-        -- A. Handle Movement
         if currentCFIndex <= totalFrames then
             while currentCFIndex < totalFrames and elapsedTime >= playerCF[currentCFIndex + 1].time do
                 currentCFIndex = currentCFIndex + 1
@@ -317,7 +319,6 @@ local function playRecord()
             end
         end
 
-        -- B. Handle Events
         local nextEvent = playerEvents[currentEventIndex]
         while nextEvent and elapsedTime >= nextEvent.time do
             if nextEvent.type == "Ignis" then
@@ -328,7 +329,6 @@ local function playRecord()
         end
     end))
 
-    -- Playback Animations
     for _, animData in ipairs(playerAnims) do
         task.delay(animData.startedAt, function()
             if not loadedAnimations[animData.animationId] then
@@ -377,11 +377,8 @@ local inputConnection = userInputService.InputBegan:Connect(function(inputObject
         maid:DoCleaning() 
         playRecord()
         
-    -- NEW: Manual X Keybind for testing VFX (WITH PRINT DEBUGGING)
     elseif inputObject.KeyCode == Enum.KeyCode.X then
         print("DEBUG: You pressed X!")
-        
-        -- Look for the unique ReplayDummy name!
         local dummyClone = workspace:FindFirstChild(targetName .. "_ReplayDummy")
         
         if dummyClone then
