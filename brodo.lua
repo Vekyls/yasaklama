@@ -149,13 +149,25 @@ end
 
 createTargetNameGui()
 
--- // 4. VFX Function
+-- // 4. VFX Function (WITH PRINT DEBUGGING)
 local function playFakeIgnis(targetChar)
-    if not cachedIgnisVFX then return end
+    print("--- ATTEMPTING TO CAST FAKE IGNIS ---")
+    
+    if not cachedIgnisVFX then 
+        warn("DEBUG: Failed! cachedIgnisVFX is nil. The sniffer hasn't caught it yet.")
+        return 
+    end
+    print("DEBUG: Step 1 Passed - We have the stolen VFX!")
 
     local burnSpell = cachedIgnisVFX:Clone()
+    
+    -- Check if the dummy actually has a Right Arm
     local rightArm = targetChar:FindFirstChild("Right Arm")
-    if not rightArm then return end
+    if not rightArm then 
+        warn("DEBUG: Failed! Could not find 'Right Arm' on the dummy. Is the game using R15 models?")
+        return 
+    end
+    print("DEBUG: Step 2 Passed - Found the Right Arm!")
 
     local weld = Instance.new("Weld")
     weld.Part0 = rightArm
@@ -164,6 +176,7 @@ local function playFakeIgnis(targetChar)
     weld.Parent = burnSpell
 
     burnSpell.Parent = targetChar
+    print("DEBUG: Step 3 Passed - Welded to the arm!")
     
     burnSpell.PointLight.Enabled = true
     burnSpell.SpotLight.Enabled = true
@@ -171,7 +184,13 @@ local function playFakeIgnis(targetChar)
     burnSpell.PointLight.Color = Color3.fromRGB(255, 128, 43)
     
     local mainIgnis = burnSpell:FindFirstChild("Flames")
-    if mainIgnis then mainIgnis.Enabled = true end
+    if mainIgnis then 
+        mainIgnis.Enabled = true 
+        print("DEBUG: Step 4 Passed - Turned the flames on!")
+    else
+        warn("DEBUG: Missing 'Flames' inside the BurnSpell brick!")
+    end
+
     if burnSpell:FindFirstChild("Hit") then burnSpell.Hit:Play() end
 
     task.delay(2, function()
@@ -180,6 +199,7 @@ local function playFakeIgnis(targetChar)
         burnSpell.SpotLight.Enabled = false
         task.wait(1.5)
         if burnSpell then burnSpell:Destroy() end
+        print("--- FAKE IGNIS FINISHED AND CLEANED UP ---")
     end)
 end
 
@@ -244,6 +264,10 @@ local function playRecord()
 
     targetChar.Archivable = true
     local newCharacter = targetChar:Clone()
+    
+    -- FIX: Name the clone something unique so we don't accidentally grab the real player!
+    newCharacter.Name = targetName .. "_ReplayDummy"
+    
     maid:GiveTask(newCharacter)
 
     for _, v in pairs(newCharacter:GetDescendants()) do
@@ -345,11 +369,18 @@ local inputConnection = userInputService.InputBegan:Connect(function(inputObject
         maid:DoCleaning() 
         playRecord()
         
-    -- NEW: Manual X Keybind for testing VFX
+    -- NEW: Manual X Keybind for testing VFX (WITH PRINT DEBUGGING)
     elseif inputObject.KeyCode == Enum.KeyCode.X then
-        local dummyClone = workspace:FindFirstChild(targetName)
+        print("DEBUG: You pressed X!")
+        
+        -- Look for the unique ReplayDummy name!
+        local dummyClone = workspace:FindFirstChild(targetName .. "_ReplayDummy")
+        
         if dummyClone then
+            print("DEBUG: Found the dummy! Running VFX function...")
             playFakeIgnis(dummyClone)
+        else
+            warn("DEBUG: Failed! Could not find the Dummy in the workspace!")
         end
     end
 end)
